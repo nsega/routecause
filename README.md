@@ -45,12 +45,22 @@ make test          # pytest: schema contract + a mocked diagnosis path
 > **Caveat:** fault symptoms take ~3 minutes to fully develop after injection;
 > don't diagnose immediately after `make inject`.
 
-## Report schema
+## Report schema (v1.0)
 
-Versioned and documented in [`routecause/schema.py`](routecause/schema.py)
-(`schema_version` `1.0`). The schema enforces the report invariants: a
-`fault_category` enum, ≥2 evidence citations from ≥2 distinct sources, and a fix
-that carries an actionable artifact.
+Versioned (`schema_version: "1.0"`) and defined in
+[`routecause/schema.py`](routecause/schema.py). The Pydantic model *enforces* the
+report invariants so a non-compliant report can't be emitted:
+
+| Field | Meaning |
+|---|---|
+| `fault_category` | exactly one of `scorer-weight-misconfig`, `unhealthy-endpoint-in-rotation`, `prefix-cache-routing-disabled`, `other` (A2) |
+| `root_cause` | `summary` + `details` (mechanism) |
+| `evidence[]` | ≥2 citations from ≥2 distinct `source`s (`prometheus`/`configmap`/`k8s-api`/`manifest-diff`); each `locator` is re-executable (A3) |
+| `hypotheses[]` | each `{hypothesis, origin (E1/E2/E3), status (confirmed/rejected), reason}` (A5) |
+| `fix` | `kubectl-patch` or `manifest-diff` with `dry_run_validated` set true only after `kubectl apply --dry-run=server` (A4) |
+| `recovery` | stretch (A6): before/after metrics + `slo_met` |
+
+Bump `schema_version` on any breaking field change.
 
 ## Version pins
 
