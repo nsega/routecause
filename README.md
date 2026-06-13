@@ -45,6 +45,33 @@ make test          # pytest: schema contract + a mocked diagnosis path
 > **Caveat:** fault symptoms take ~3 minutes to fully develop after injection;
 > don't diagnose immediately after `make inject`.
 
+### Live service & public URL
+
+```sh
+make serve                                  # POST /diagnose, GET /reports/latest (HTML)
+make tunnel                                 # cloudflared quick tunnel -> public https URL
+```
+
+### Apply mode (stretch, A6)
+
+Closing the loop is **quarantined**: the diagnosis side (collectors, hypothesis
+subagents, refuters) is strictly read-only; only the separate Actuator mutates
+the cluster, and only behind an explicit opt-in.
+
+```sh
+ROUTECAUSE_ALLOW_APPLY=1 uv run routecause apply vllm-sim-pool
+# diagnoses, applies the validated fix, reloads the EPP, watches the same
+# metrics until P95 e2e is back under the 16s SLO, and reports before/after.
+```
+
+## Safety / isolation
+
+- The diagnosis agent is read-only by construction (`routecause/kube.py` exposes
+  only read verbs); mutation lives solely in `routecause/actuator.py`.
+- The ground-truth fault label is never read by the agent — the literal path
+  does not appear anywhere in `routecause/` (the verifier confirms this).
+- Every `kubectl` call is pinned to the `kind-inference-lab` context.
+
 ## Report schema (v1.0)
 
 Versioned (`schema_version: "1.0"`) and defined in
