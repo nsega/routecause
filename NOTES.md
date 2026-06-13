@@ -88,5 +88,13 @@ moment the agent caught and fixed its own failure).
 - S2: A1–A4 PASS after [SELF-CORRECTION] #2 (verifier rejected A3 → fixed → re-grade passes).
 - S3: A1–A4 PASS (fresh-context verifier, independent re-verification).
 - A7 regression: re-ran S1 and S2 after all fixes — both still PASS A1–A4.
-- Tests: 24 green (`make test`). Remaining: B (live URL / demo) + C (push public,
-  session log) MUSTs, then stretch actuator (A6).
+- B: B1 live public URL (cloudflared) serves /healthz, POST /diagnose (JSON),
+  /reports/latest (single-report HTML) — all 200. B2 `make demo` reaches a
+  passing S1 diagnosis. B3 `make test` 24 green. B4 schema v1.0 documented.
+- C: pushed to the public repo (C1); granular history (C4); PROVENANCE consistent
+  (C5); BRIEF/RUBRIC/NOTES/workflow committed (C3). C2 session log = human export
+  at submission.
+- A6 (stretch) DONE: quarantined actuator applied the S1 fix and the pool
+  recovered — P95 e2e 18.96s→15.28s (back under the 16s SLO), max queue 88→0,
+  idle backends back to ~3.5 rps; `applied=true, slo_met=true`.
+- Tests: 24 green (`make test`).
