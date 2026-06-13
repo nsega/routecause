@@ -86,5 +86,7 @@ moment the agent caught and fixed its own failure).
 
 - S1: A1–A4 PASS (fresh-context verifier), A5 PASS after [SELF-CORRECTION] #1.
 - S2: A1–A4 PASS after [SELF-CORRECTION] #2 (verifier rejected A3 → fixed → re-grade passes).
-- S3: pending.
-- Tests: schema + collectors + mocked orchestrator path, all green (`make test`).
+- S3: A1–A4 PASS (fresh-context verifier, independent re-verification).
+- A7 regression: re-ran S1 and S2 after all fixes — both still PASS A1–A4.
+- Tests: 24 green (`make test`). Remaining: B (live URL / demo) + C (push public,
+  session log) MUSTs, then stretch actuator (A6).
