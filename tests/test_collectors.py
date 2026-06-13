@@ -225,6 +225,25 @@ def test_e3_healthy_identical_args_has_no_signals(monkeypatch):
     assert r.signals == []
 
 
+def test_e3_majority_baseline_only_flags_culprit(monkeypatch):
+    # b2 diverges on latency args + failure injection; b0/b1 share the baseline.
+    # Majority baseline must flag ONLY b2 (intersection-of-all would wrongly flag b0/b1).
+    base = ["--port=8000", "--prefill-time-per-token=2ms", "--inter-token-latency=25ms"]
+    _patch_cluster(
+        monkeypatch,
+        {
+            "backend-0": base + ["--seed=100"],
+            "backend-1": base + ["--seed=101"],
+            "backend-2": ["--port=8000", "--prefill-time-per-token=10ms",
+                          "--inter-token-latency=40ms", "--failure-injection-rate=25", "--seed=102"],
+        },
+    )
+    r = clusterstate.collect_clusterstate("vllm-sim-pool")
+    assert FaultCategory.UNHEALTHY_ENDPOINT in _categories(r)
+    assert len(r.signals) == 1, "only the culprit backend should be flagged"
+    assert "backend-2" in r.signals[0].rationale
+
+
 def test_e3_failure_injection_is_s2(monkeypatch):
     _patch_cluster(
         monkeypatch,

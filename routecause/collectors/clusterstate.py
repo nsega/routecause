@@ -8,6 +8,8 @@ healthy but recently changed" endpoints — chiefly an endpoint kept in rotation
 
 from __future__ import annotations
 
+from collections import Counter
+
 from ..config import BACKEND_DEPLOYMENTS, ENDPOINT_SELECTOR
 from ..kube import KubectlError, get_json
 from ..schema import Evidence, EvidenceSource, FaultCategory
@@ -56,17 +58,17 @@ def collect_clusterstate(pool: str) -> CollectorResult:
         except (KubectlError, KeyError, IndexError) as e:
             res.errors.append(f"deploy {d} read failed: {e}")
 
-    # Baseline = args shared by all backends (ignoring --seed). Anomalies = a
-    # backend carrying non-seed args the others don't.
+    # Baseline = args shared by a MAJORITY of backends (ignoring --seed), NOT the
+    # intersection of all: if one backend's args diverge, the intersection shrinks
+    # and the healthy backends would wrongly look off-baseline. Anomalies = a
+    # backend carrying non-seed args the majority doesn't.
     if args_by_backend:
-        common: set[str] | None = None
-        for args in args_by_backend.values():
-            s = set(_non_seed(args))
-            common = s if common is None else (common & s)
-        common = common or set()
+        counts = Counter(a for args in args_by_backend.values() for a in _non_seed(args))
+        threshold = (len(args_by_backend) // 2) + 1  # 3 backends -> 2
+        baseline = {a for a, c in counts.items() if c >= threshold}
 
         for d, args in args_by_backend.items():
-            extra = [a for a in _non_seed(args) if a not in common]
+            extra = [a for a in _non_seed(args) if a not in baseline]
             fault_args = [a for a in args if a.startswith("--failure-injection-rate")]
             fault_on = any((_arg_value(a) or "0") not in ("0", "0.0", "") for a in fault_args)
 

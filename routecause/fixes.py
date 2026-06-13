@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import difflib
+from collections import Counter
 
 import yaml
 
@@ -139,26 +140,40 @@ def fix_prefix_cache_disabled() -> Fix:
                          f"{EPP_CONFIGMAP}/{EPP_CONFIG_KEY}", impact, reload_needed=True)
 
 
+def _fault_on(args: list[str]) -> bool:
+    for a in args:
+        if a.startswith("--failure-injection-rate"):
+            val = a.split("=", 1)[1] if "=" in a else "0"
+            if val not in ("0", "0.0", ""):
+                return True
+    return False
+
+
 def fix_unhealthy_endpoint() -> Fix:
-    """S2: restore the off-baseline backend's container args to the shared baseline."""
+    """S2: restore the degraded backend's container args to the healthy peer baseline."""
     deploys = {d: get_json("deploy", d) for d in BACKEND_DEPLOYMENTS}
     args_by = {
         d: dep["spec"]["template"]["spec"]["containers"][0].get("args", [])
         for d, dep in deploys.items()
     }
-    common: set[str] | None = None
-    for args in args_by.values():
-        s = {a for a in args if not a.startswith("--seed")}
-        common = s if common is None else (common & s)
-    common = common or set()
+    # Majority baseline: an arg shared by >= 2 backends is the baseline.
+    counts = Counter(a for args in args_by.values() for a in args if not a.startswith("--seed"))
+    baseline = {a for a, c in counts.items() if c >= 2}
 
-    target = next((d for d, args in args_by.items()
-                   if [a for a in args if not a.startswith("--seed") and a not in common]), None)
+    def divergence(args: list[str]) -> int:
+        return sum(1 for a in args if not a.startswith("--seed") and a not in baseline)
+
+    # Target the backend with active failure injection; else the most off-baseline one.
+    target = next((d for d, args in args_by.items() if _fault_on(args)), None)
+    if target is None:
+        target = max(args_by, key=lambda d: divergence(args_by[d]))
+        if divergence(args_by[target]) == 0:
+            target = None
     if target is None:
         return Fix(type=FixType.MANIFEST_DIFF, diff="(no off-baseline backend found)",
                    dry_run_validated=False, expected_impact="no action")
 
-    peer = next(d for d in args_by if d != target)
+    peer = next(d for d in args_by if d != target and not _fault_on(args_by[d]))
     target_seed = next((a for a in args_by[target] if a.startswith("--seed")), None)
     corrected_args = [a for a in args_by[peer] if not a.startswith("--seed")]
     if target_seed:

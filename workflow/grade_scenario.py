@@ -29,7 +29,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from routecause.kube import apply_dry_run_server  # noqa: E402
+from collections import Counter  # noqa: E402
+
+from routecause.config import BACKEND_DEPLOYMENTS  # noqa: E402
+from routecause.kube import apply_dry_run_server, get_json  # noqa: E402
 from routecause.prom import PrometheusClient, PrometheusError  # noqa: E402
 from routecause.schema import SCENARIO_TO_CATEGORY, Report  # noqa: E402
 
@@ -86,9 +89,37 @@ def grade(report: Report, ground_label: str) -> dict:
                 ok = False
             reexec_ok &= ok
             reexec_detail.append(f"prom[{'ok' if ok else 'NO DATA'}] {e.locator[:40]}")
-    add("A3", "MUST", len(sources) >= 2 and reexec_ok,
+
+    # Validate k8s-api "off-baseline / patched" citations against live args: a claim
+    # that a backend is off-baseline must be true (that backend must actually diverge
+    # from the majority baseline), else it is a false citation and A3 fails.
+    k8s_ok, k8s_detail = True, []
+    claims = [
+        e for e in report.evidence
+        if e.source.value == "k8s-api"
+        and re.search(r"backend-\d", e.observed)
+        and any(kw in e.observed.lower() for kw in ("off-baseline", "absent on peers", "patched"))
+    ]
+    if claims:
+        args_by = {}
+        for d in BACKEND_DEPLOYMENTS:
+            try:
+                dep = get_json("deploy", d)
+                args_by[d] = dep["spec"]["template"]["spec"]["containers"][0].get("args", [])
+            except Exception:
+                pass
+        counts = Counter(a for args in args_by.values() for a in args if not a.startswith("--seed"))
+        threshold = (len(args_by) // 2) + 1 if args_by else 2
+        baseline = {a for a, c in counts.items() if c >= threshold}
+        for e in claims:
+            name = re.search(r"backend-\d", e.observed).group(0)
+            diverges = any(a for a in args_by.get(name, []) if not a.startswith("--seed") and a not in baseline)
+            k8s_ok &= diverges
+            k8s_detail.append(f"k8s[{name}:{'off-baseline-true' if diverges else 'FALSE-actually-healthy'}]")
+
+    add("A3", "MUST", len(sources) >= 2 and reexec_ok and k8s_ok,
         f"{len(report.evidence)} citations across {sorted(sources)}; "
-        f"re-exec: {'; '.join(reexec_detail) or 'no prometheus locators'}")
+        f"re-exec: {'; '.join(reexec_detail + k8s_detail) or 'no re-executable locators'}")
 
     # A4 — fix passes kubectl apply --dry-run=server (re-run the report's own fix)
     a4_ok, a4_detail = False, "no manifest found in fix.command"

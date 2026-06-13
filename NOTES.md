@@ -59,8 +59,32 @@ moment the agent caught and fixed its own failure).
 - **Rule distilled:** a diagnosis is not done when it names the cause — it must
   also show the alternatives it falsified. Enumerate rejections by default.
 
+### [SELF-CORRECTION] #2 — S2 false evidence + fix-gen crash (intersection baseline)
+- **Fail:** on S2, (a) fix generation **crashed** (empty manifest diff → A4 schema
+  validator) and (b) the fresh-context verifier **rejected the report on A3**:
+  two k8s-api citations falsely claimed healthy backend-0 and backend-1 were
+  "patched off-baseline."
+- **Root cause (one bug, two symptoms):** E3 and the fix used the
+  **intersection of all backends' args** as the baseline. S2 also changes
+  backend-2's latency args (`prefill 2ms→10ms`, `itl 25ms→40ms`), so the shared
+  b0/b1 args fell out of the intersection — making the healthy backends look
+  off-baseline (false evidence) AND making fix-gen pick the wrong target backend
+  (b0), whose corrected args equalled its current args → empty diff → crash.
+- **Fix:** baseline is now the **majority** (an arg shared by ≥2 backends); fix-gen
+  targets the backend with active `--failure-injection-rate` (fallback:
+  most-divergent). Only backend-2 is flagged now. Regression test added.
+- **Bonus (verifier caught a grader blind spot):** `grade_scenario.py` validated
+  only Prometheus citations, not k8s-api ones, so it wrongly passed the buggy
+  report. Hardened the grader to re-read live Deployment args and fail A3 on any
+  false "off-baseline" citation.
+- **Re-grade:** S2 cites only backend-2; all MUSTs pass.
+- **Rules distilled:** (1) a baseline is the **majority**, never the intersection
+  — a fault on one member must not make the others look faulty. (2) A grader must
+  re-validate **every** evidence source, not just the convenient one.
+
 ## Status
 
 - S1: A1–A4 PASS (fresh-context verifier), A5 PASS after [SELF-CORRECTION] #1.
-- S2, S3: pending.
+- S2: A1–A4 PASS after [SELF-CORRECTION] #2 (verifier rejected A3 → fixed → re-grade passes).
+- S3: pending.
 - Tests: schema + collectors + mocked orchestrator path, all green (`make test`).
