@@ -12,3 +12,6 @@ dist/
 build/
 .DS_Store
 *.log
+
+# RouteCause runtime artifacts
+reports/
