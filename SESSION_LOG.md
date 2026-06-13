@@ -5,8 +5,10 @@ was done, the fresh-context verifier verdicts, the self-correction transitions,
 and the ground-truth-access audit. Complements `NOTES.md` (rules/decisions) and
 the granular `git log`.
 
-> The full raw Claude Code transcript is exported and attached at submission
-> (the one sanctioned human step). This file is the curated, auditable summary.
+> This file is the curated, auditable summary. The **full session transcript**
+> is exported to [`session-log.md`](session-log.md) (secret-scanned clean); the
+> per-verifier subagent transcripts (verbatim verdicts) are under the Claude Code
+> session's `subagents/` directory and can be attached alongside.
 
 ## Ground-truth access audit (RUBRIC A)
 
