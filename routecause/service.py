@@ -7,6 +7,7 @@ evidence / fix) — deliberately one report, never a multi-panel dashboard.
 
 from __future__ import annotations
 
+import asyncio
 import html
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from . import store
+from . import actuator, store
 from .config import ROUTER_DISPLAY_NAME
 from .orchestrator import diagnose_async
 from .schema import FaultCategory, Report
@@ -83,6 +84,23 @@ _LANDING = (
 @app.post("/diagnose", response_model=Report)
 async def post_diagnose(req: DiagnoseRequest) -> Report:
     report = await diagnose_async(req.pool)
+    store.save(report)
+    return report
+
+
+class ApplyRequest(BaseModel):
+    pool: str = "vllm-sim-pool"
+    watch_timeout: int = 300
+
+
+@app.post("/apply", response_model=Report)
+async def post_apply(req: ApplyRequest) -> Report:
+    """Stretch (A6): diagnose, then apply the validated fix and watch recovery.
+    Quarantined behind an explicit opt-in — refuses unless apply is enabled."""
+    if not actuator.apply_enabled():
+        raise HTTPException(status_code=403, detail=f"apply disabled; set {actuator.ALLOW_APPLY_ENV}=1")
+    report = await diagnose_async(req.pool)
+    report.recovery = await asyncio.to_thread(actuator.actuate, report.fix, None, req.watch_timeout)
     store.save(report)
     return report
 
