@@ -56,6 +56,50 @@ _SUMMARY = {
 }
 
 
+_REAL_CATEGORIES = [
+    FaultCategory.SCORER_WEIGHT_MISCONFIG,
+    FaultCategory.UNHEALTHY_ENDPOINT,
+    FaultCategory.PREFIX_CACHE_DISABLED,
+]
+# The collector that authoritatively speaks to each category (for hypothesis origin).
+_AUTH_ORIGIN = {
+    FaultCategory.SCORER_WEIGHT_MISCONFIG: "E2",
+    FaultCategory.UNHEALTHY_ENDPOINT: "E3",
+    FaultCategory.PREFIX_CACHE_DISABLED: "E2",
+}
+
+
+def _ruled_out_reason(cat: FaultCategory, collectors: dict[str, CollectorResult]) -> str:
+    """Evidence-grounded reason a non-chosen fault category does not fit (A5)."""
+    e1 = collectors.get("E1")
+    e2 = collectors.get("E2")
+    e3 = collectors.get("E3")
+    if cat == FaultCategory.SCORER_WEIGHT_MISCONFIG:
+        return f"ruled out: scheduling-profile scorer weights are positive and no single-backend queue pile-up ({e2.summary if e2 else ''}; {e1.summary if e1 else ''})"
+    if cat == FaultCategory.UNHEALTHY_ENDPOINT:
+        return f"ruled out: no backend carries fault-injection args and per-backend success rps is balanced ({e3.summary if e3 else ''})"
+    if cat == FaultCategory.PREFIX_CACHE_DISABLED:
+        return f"ruled out: prefix-cache-scorer is active in the profile and the pool prefix-cache hit rate is healthy ({e2.summary if e2 else ''})"
+    return "ruled out by aggregate evidence"
+
+
+def _alt_hypotheses(present: set[FaultCategory], chosen: FaultCategory, collectors) -> list[Hypothesis]:
+    """Enumerate the other real fault categories as explicitly rejected (A5)."""
+    out: list[Hypothesis] = []
+    for cat in _REAL_CATEGORIES:
+        if cat == chosen or cat in present:
+            continue
+        out.append(
+            Hypothesis(
+                hypothesis=_SUMMARY[cat],
+                origin=HypothesisOrigin(_AUTH_ORIGIN[cat]),
+                status=HypothesisStatus.REJECTED,
+                reason=_ruled_out_reason(cat, collectors),
+            )
+        )
+    return out
+
+
 def _aggregate(collectors: dict[str, CollectorResult]) -> tuple[FaultCategory, dict[FaultCategory, float]]:
     scores: dict[FaultCategory, float] = defaultdict(float)
     for r in collectors.values():
@@ -141,6 +185,7 @@ def _build_hypotheses(chosen: FaultCategory, collectors: dict[str, CollectorResu
                 ),
             )
         )
+    hyps.extend(_alt_hypotheses({chosen} | raised, chosen, collectors))
     return hyps
 
 
@@ -219,6 +264,7 @@ def _build_hypotheses_llm(chosen, collectors, llm_hyps, verdicts) -> list[Hypoth
                 reason=reason[:600],
             )
         )
+    hyps.extend(_alt_hypotheses(set(proposed.keys()) | {chosen}, chosen, collectors))
     return hyps
 
 
