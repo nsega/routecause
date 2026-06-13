@@ -12,11 +12,13 @@ the LLM, so a diagnosis still completes (and stays correct) without it.
 
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 from datetime import datetime, timezone
 
+from . import llm
 from .collectors import CollectorResult, run_all_collectors
-from .config import ROUTER_DISPLAY_NAME, SLO_P95_E2E_SECONDS
+from .config import ROUTER_DISPLAY_NAME, SLO_P95_E2E_SECONDS, get_settings
 from .fixes import generate_fix
 from .schema import (
     Evidence,
@@ -167,13 +169,85 @@ def _details(category: FaultCategory, evidence: list[Evidence]) -> str:
     return f"{mechanism} Evidence: {cited}."
 
 
-def diagnose(pool: str, prom=None) -> Report:
+def _candidate_categories(det_chosen, scores, llm_hyps) -> list[FaultCategory]:
+    cats = {det_chosen}
+    cats.update(c for c, sc in scores.items() if sc > 0)
+    for hlist in llm_hyps.values():
+        for h in hlist:
+            if h.confidence >= 0.5:
+                cats.add(h.fault_category)
+    return list(cats)
+
+
+def _reconcile(det_chosen, scores, verdicts) -> FaultCategory:
+    """Trust the validated deterministic choice unless a refuter explicitly rejects it
+    AND confirms exactly one alternative that *also* has deterministic support (protects A2)."""
+    dv = verdicts.get(det_chosen)
+    if dv is None or dv.verdict == HypothesisStatus.CONFIRMED:
+        return det_chosen
+    confirmed = [
+        c for c, v in verdicts.items()
+        if v.verdict == HypothesisStatus.CONFIRMED and c != FaultCategory.OTHER and scores.get(c, 0) > 0
+    ]
+    return confirmed[0] if len(confirmed) == 1 else det_chosen
+
+
+def _build_hypotheses_llm(chosen, collectors, llm_hyps, verdicts) -> list[Hypothesis]:
+    proposed: dict[FaultCategory, tuple[str, float, str]] = {}
+    for cname, hlist in llm_hyps.items():
+        for h in hlist:
+            cur = proposed.get(h.fault_category)
+            if cur is None or h.confidence > cur[1]:
+                proposed[h.fault_category] = (cname, h.confidence, h.rationale)
+    if chosen not in proposed:
+        best, origin = _best_signal(chosen, collectors)
+        proposed[chosen] = (origin or "E1", 1.0, best.rationale if best else "selected by aggregate evidence")
+
+    hyps: list[Hypothesis] = []
+    for cat, (cname, _conf, rat) in sorted(proposed.items(), key=lambda kv: -kv[1][1]):
+        v = verdicts.get(cat)
+        status = HypothesisStatus.CONFIRMED if cat == chosen else (v.verdict if v else HypothesisStatus.REJECTED)
+        if v:
+            reason = v.reason + (" Evidence: " + "; ".join(v.supporting_evidence[:3]) if v.supporting_evidence else "")
+        else:
+            reason = rat
+        hyps.append(
+            Hypothesis(
+                hypothesis=_SUMMARY.get(cat, cat.value),
+                origin=HypothesisOrigin(cname) if cname in ("E1", "E2", "E3") else HypothesisOrigin.E1,
+                status=status,
+                reason=reason[:600],
+            )
+        )
+    return hyps
+
+
+async def diagnose_async(pool: str, prom=None, use_llm: bool = True) -> Report:
     started = datetime.now(timezone.utc).isoformat()
-    collectors = run_all_collectors(pool, prom=prom)
-    chosen, _scores = _aggregate(collectors)
+    collectors = await asyncio.to_thread(run_all_collectors, pool, prom)
+    det_chosen, scores = _aggregate(collectors)
+    chosen = det_chosen
+    llm_hyps: dict = {}
+    verdicts: dict = {}
+    llm_used = False
+
+    if use_llm and get_settings().anthropic_api_key:
+        try:
+            llm_hyps = await llm.hypothesize_all(collectors)
+            candidates = _candidate_categories(det_chosen, scores, llm_hyps)
+            verdicts = await llm.refute_all(candidates, collectors)
+            chosen = _reconcile(det_chosen, scores, verdicts)
+            llm_used = bool(llm_hyps) or bool(verdicts)
+        except Exception:
+            chosen, llm_used = det_chosen, False  # graceful fallback to deterministic core
+
     evidence = _assemble_evidence(chosen, collectors)
-    hypotheses = _build_hypotheses(chosen, collectors)
-    fix: Fix = generate_fix(chosen)
+    hypotheses = (
+        _build_hypotheses_llm(chosen, collectors, llm_hyps, verdicts)
+        if llm_used
+        else _build_hypotheses(chosen, collectors)
+    )
+    fix: Fix = await asyncio.to_thread(generate_fix, chosen)
     completed = datetime.now(timezone.utc).isoformat()
     return Report(
         pool=pool,
@@ -185,3 +259,8 @@ def diagnose(pool: str, prom=None) -> Report:
         hypotheses=hypotheses,
         fix=fix,
     )
+
+
+def diagnose(pool: str, prom=None, use_llm: bool = True) -> Report:
+    """Synchronous entry point (CLI / tests). Use ``diagnose_async`` inside an event loop."""
+    return asyncio.run(diagnose_async(pool, prom=prom, use_llm=use_llm))
